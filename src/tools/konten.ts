@@ -50,7 +50,7 @@ export function register(server: McpServer): void {
     {
       kontonummer: z
         .string()
-        .describe('Kontonummer, z.B. 1200 (Bank) oder 8200 (Erloese Inland 19 %)'),
+        .describe('Kontonummer aus konten_liste, z.B. im SKR03 1200 (Bank) oder 8400 (Erloese 19 % USt)'),
       from: z.string().optional().describe('Zeitraum von (YYYY-MM-DD)'),
       to: z.string().optional().describe('Zeitraum bis (YYYY-MM-DD)'),
     },

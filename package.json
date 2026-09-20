@@ -1,7 +1,7 @@
 {
   "name": "@epago/epago-mcp",
-  "version": "0.1.0",
-  "description": "MCP-Server fuer epago – greift per API-Key auf die epago Public API v1 zu (Buchhaltung, Konten, Belege, Berichte)",
+  "version": "0.2.0",
+  "description": "MCP-Server für epago: greift per API-Schlüssel auf die epago Public API v1 zu (Buchhaltung, Konten, Belege, Berichte)",
   "type": "module",
   "main": "dist/index.js",
   "scripts": {
@@ -45,7 +45,6 @@
     "buchhaltung",
     "accounting",
     "gobd",
-    "datev",
-    "claude"
+    "datev"
   ]
 }

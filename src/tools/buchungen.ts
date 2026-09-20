@@ -6,24 +6,6 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { McpError, ErrorCode } from '@modelcontextprotocol/sdk/types.js'
 import { z } from 'zod'
 import { api } from '../lib/api.js'
-import { buildSimpleLines, AUTO_ACCOUNTS, TAX_KEYS } from '../lib/steuer.js'
-
-/**
- * Leitet die Brutto-Seite des Geldkontos aus dem BU-Schluessel ab.
- * VSt (8/9): Brutto im Haben (Verbindlichkeit-Seite)
- * USt (2/3), steuerfrei (1), kein BU: Brutto im Soll
- * Bei Automatikkonten den festen Schluessel nutzen.
- */
-function inferBruttoSide(
-  bruttoKonto: string,
-  sachKonto: string,
-  buKey?: string
-): 'S' | 'H' {
-  const effectiveKey = AUTO_ACCOUNTS[sachKonto] ?? AUTO_ACCOUNTS[bruttoKonto] ?? buKey ?? ''
-  const def = TAX_KEYS[effectiveKey]
-  if (def?.kind === 'vst') return 'H'
-  return 'S'
-}
 
 export function registerRead(server: McpServer): void {
   // ──────────────────────────────────────────────────────────────────────────
@@ -65,13 +47,21 @@ export function registerWrite(server: McpServer): void {
       'eine nachtraegliche Korrektur ist nur per Storno moeglich (buchung_stornieren).',
       '',
       'Zwei Modi:',
-      '1. Vereinfacht (betrag + bruttoKonto + sachKonto + optional steuerschluessel):',
-      '   Der Server baut den korrekten Buchungssatz automatisch inkl. Steuer-Split.',
+      '1. Vereinfacht (betrag + bruttoKonto + sachKonto, optional steuerschluessel und seite):',
+      '   Der SERVER baut den Buchungssatz inklusive Steuer-Split — mit dem Kontenrahmen des',
+      '   Mandanten (SKR03 oder SKR04). Welche Kontonummer ein Automatikkonto ist, weiss deshalb',
+      '   nur der Server; dieses Werkzeug fuehrt bewusst KEINE eigene Kontentabelle.',
+      '   Welche Konten es gibt und was sie bedeuten, zeigt konten_liste.',
       '   Steuerschluessel: 1=steuerfrei, 2=USt 7%, 3=USt 19%, 8=VSt 7%, 9=VSt 19%.',
-      '   Automatikkonten (8200/8100/8400/4400/4300) erkennen den Schluessel automatisch.',
+      '   Auf einem Automatikkonto darf KEIN steuerschluessel mitgegeben werden — der Server',
+      '   weist das ab, weil das Konto den Schluessel schon traegt.',
+      '   Die Antwort nennt die erzeugten Zeilen, den effektiven Steuerschluessel, den',
+      '   Netto-/Steuer-Split und den Kontenrahmen. Dem Nutzer den Buchungssatz zeigen.',
       '2. Experten-Modus (lines[]): Buchungszeilen explizit angeben (accountNumber, debit, credit, taxCode).',
       '',
-      'Validierung auf API-Seite: Soll=Haben (Toleranz 0,01 EUR), Steuerautomatik-Konsistenz,',
+      'Genau EINEN Modus benutzen. Beide zusammen weist die API mit 400 ab.',
+      '',
+      'Validierung auf API-Seite: Soll=Haben, Steuerautomatik-Konsistenz, Kontoexistenz,',
       'Periodensperre (festgeschriebene Perioden → 409 period_closed).',
     ].join('\n'),
     {
@@ -99,31 +89,48 @@ export function registerWrite(server: McpServer): void {
         .string()
         .optional()
         .describe(
-          'Kontonummer des Geldkontos (traegt den Bruttobetrag). ' +
-            'Beispiele: "1000" (Kasse), "1200" (Bank), "1400" (Forderungen), "3300" (Verbindlichkeiten).'
+          'Kontonummer, die den Bruttobetrag traegt — das Geld- oder Personenkonto. '
+            + 'Im SKR03 z.B. 1000 (Kasse), 1200 (Bank), 1400 (Forderungen aus Lieferungen und '
+            + 'Leistungen), 1600 (Verbindlichkeiten aus Lieferungen und Leistungen); '
+            + 'im SKR04 1600 (Kasse), 1800 (Bank), 1200 (Forderungen), 3300 (Verbindlichkeiten). '
+            + 'Welcher Rahmen gilt, zeigt konten_liste.'
         ),
       bruttoKontoName: z
         .string()
         .optional()
-        .describe('Name des Geldkontos (optional)'),
+        .describe('Name des Kontos (optional, nur fuer die Lesbarkeit der Buchungszeile)'),
       sachKonto: z
         .string()
         .optional()
         .describe(
-          'Kontonummer des Sachkontos (traegt Netto + ggf. Steuerzeile). ' +
-            'Beispiele: "8200" (Erloese 19%), "6815" (Burobedarf), "4400" (Wareneingang 19% VSt).'
+          'Kontonummer des Sachkontos — Erloes oder Aufwand. Traegt den Nettobetrag; '
+            + 'die Steuerzeile setzt der Server daneben. Nummern aus konten_liste nehmen, '
+            + 'nicht raten: dieselbe Nummer bedeutet im SKR03 und im SKR04 oft Verschiedenes '
+            + '(3400 ist im SKR03 Wareneingang 19 % Vorsteuer, im SKR04 eine Verbindlichkeit).'
         ),
       sachKontoName: z
         .string()
         .optional()
-        .describe('Name des Sachkontos (optional)'),
+        .describe('Name des Sachkontos (optional, nur fuer die Lesbarkeit der Buchungszeile)'),
       steuerschluessel: z
         .string()
         .optional()
         .describe(
-          'BU-Schluessel: 1=steuerfrei, 2=USt 7%, 3=USt 19%, 8=VSt 7%, 9=VSt 19%. ' +
-            'Leer lassen bei Automatikkonten (8200/8100/8400/4400/4300) — diese erkennen den Schluessel automatisch. ' +
-            'Fuer manuelle Steuerschluessel (z.B. BU 9 auf Konto 6815): hier angeben.'
+          'BU-Schluessel: 1=steuerfrei, 2=USt 7%, 3=USt 19%, 8=VSt 7%, 9=VSt 19%. '
+            + 'Weglassen, wenn eines der beiden Konten ein Automatikkonto ist — der Server '
+            + 'erkennt den Schluessel dann am Konto und weist eine zusaetzliche Angabe ab.'
+        ),
+      seite: z
+        .enum(['S', 'H'])
+        .optional()
+        .describe(
+          'Soll (S) oder Haben (H) des Kontos aus bruttoKonto. Normalerweise weglassen: '
+            + 'bei 2/3/8/9 leitet der Server die Richtung aus dem Steuerfall ab. '
+            + 'Anzugeben ist sie bei Steuerschluessel 1 (steuerfrei), bei einer Buchung ganz '
+            + 'ohne Steuer (reine Umbuchung, z.B. Bank an Kasse) und wenn die Buchung '
+            + 'andersherum laufen soll als der Regelfall (Gutschrift, Warenruecksendung). '
+            + 'Verlangt der Server sie, sagt er das in der Fehlermeldung — dann beim Nutzer '
+            + 'nachfragen statt zu raten.'
         ),
       // Experten-Modus
       lines: z
@@ -146,56 +153,71 @@ export function registerWrite(server: McpServer): void {
         ),
     },
     async (params) => {
-      let lines: Array<{
-        accountNumber: string
-        accountName?: string
-        debit: number
-        credit: number
-        taxCode?: string | null
-      }>
+      const hatZeilen = Array.isArray(params.lines) && params.lines.length > 0
+      const hatVereinfacht =
+        params.betrag !== undefined
+        || params.bruttoKonto !== undefined
+        || params.sachKonto !== undefined
+        || params.steuerschluessel !== undefined
+        || params.seite !== undefined
 
-      if (params.lines && params.lines.length >= 2) {
-        // Experten-Modus: Zeilen direkt verwenden
-        lines = params.lines
-      } else if (params.betrag && params.bruttoKonto && params.sachKonto) {
-        // Vereinfachter Modus: Buchungssatz aufbauen
-        const buKey = params.steuerschluessel
-        const bruttoSide = inferBruttoSide(params.bruttoKonto, params.sachKonto, buKey)
-        const result = buildSimpleLines(
-          params.betrag,
-          params.bruttoKonto,
-          params.bruttoKontoName || params.bruttoKonto,
-          bruttoSide,
-          params.sachKonto,
-          params.sachKontoName || params.sachKonto,
-          buKey
+      if (hatZeilen && hatVereinfacht) {
+        throw new McpError(
+          ErrorCode.InvalidRequest,
+          'Entweder lines[] (Experten-Modus) ODER betrag + bruttoKonto + sachKonto '
+            + '(vereinfacht) angeben, nicht beides.'
         )
-        if (!result.ok) {
-          throw new McpError(ErrorCode.InvalidRequest, result.message)
-        }
-        lines = result.lines
-      } else {
+      }
+      if (!hatZeilen && !hatVereinfacht) {
         throw new McpError(
           ErrorCode.InvalidRequest,
           'Entweder betrag + bruttoKonto + sachKonto (vereinfacht) oder lines[] (Experten-Modus) angeben.'
         )
       }
 
-      const body = {
+      const kopf = {
         date: params.datum,
         description: params.beschreibung,
         reference: params.referenz || null,
         status: params.status,
-        lines: lines.map((l) => ({
-          accountNumber: l.accountNumber,
-          ...(l.accountName ? { accountName: l.accountName } : {}),
-          debit: l.debit ?? 0,
-          credit: l.credit ?? 0,
-          ...(l.taxCode !== undefined ? { taxCode: l.taxCode } : {}),
-        })),
       }
 
-      const result = await api.post<{ entry: unknown }>('/journal-entries', body)
+      // Vereinfachte Form: die Felder gehen UNVERAENDERT an die API. Die Zeilen
+      // baut der Server ueber denselben Weg wie die Stapelerfassung der
+      // Oberflaeche (buildStapelLines), mit dem Kontenrahmen des Mandanten.
+      // Frueher stand hier eine eigene Kontentabelle; sie fuehrte noch die
+      // Automatikkonten des alten Kontenstamms und baute damit fuer jeden
+      // Bestandsmandanten falsche Zeilen.
+      const body = hatZeilen
+        ? {
+            ...kopf,
+            lines: params.lines!.map((l) => ({
+              accountNumber: l.accountNumber,
+              ...(l.accountName ? { accountName: l.accountName } : {}),
+              debit: l.debit ?? 0,
+              credit: l.credit ?? 0,
+              ...(l.taxCode !== undefined ? { taxCode: l.taxCode } : {}),
+            })),
+          }
+        : {
+            ...kopf,
+            betrag: params.betrag,
+            bruttoKonto: params.bruttoKonto,
+            ...(params.bruttoKontoName ? { bruttoKontoName: params.bruttoKontoName } : {}),
+            sachKonto: params.sachKonto,
+            ...(params.sachKontoName ? { sachKontoName: params.sachKontoName } : {}),
+            ...(params.steuerschluessel ? { steuerschluessel: params.steuerschluessel } : {}),
+            ...(params.seite ? { seite: params.seite } : {}),
+          }
+
+      const result = await api.post<{
+        entry: unknown
+        zeilen?: unknown
+        steuerschluessel?: string | null
+        split?: unknown
+        kontenrahmen?: string
+      }>('/journal-entries', body)
+
       return {
         content: [
           {
@@ -205,9 +227,14 @@ export function registerWrite(server: McpServer): void {
                 success: true,
                 message: `Buchung angelegt (${params.status}). ID fuer etwaigen Storno merken.`,
                 entry: result.entry,
-                ...(params.betrag && !params.lines
-                  ? { generierteZeilen: lines.length, steuersplit: true }
+                // Nur bei der vereinfachten Form gesetzt: was der Server aus den
+                // drei Angaben gemacht hat. Dem Nutzer zeigen.
+                ...(result.zeilen ? { zeilen: result.zeilen } : {}),
+                ...(result.steuerschluessel !== undefined
+                  ? { steuerschluessel: result.steuerschluessel }
                   : {}),
+                ...(result.split ? { split: result.split } : {}),
+                ...(result.kontenrahmen ? { kontenrahmen: result.kontenrahmen } : {}),
               },
               null,
               2
