@@ -48,7 +48,19 @@ interface MeResponse {
   apiKey: {
     keyId: string
     permissions: string[]
+    /**
+     * Umgebung des Schluessels. 'sandbox' heisst: der Schluessel arbeitet auf
+     * dem Testmandanten des Kontos und erreicht die echte Buchhaltung nie.
+     * Aeltere epago-Staende liefern das Feld nicht — dann gilt 'live', so wie
+     * es vorher war.
+     */
+    umgebung?: 'live' | 'sandbox'
   }
+}
+
+/** 'SANDBOX' oder 'LIVE' — genau ein Wort, an einer Stelle gebildet. */
+function umgebungLabel(me: MeResponse): string {
+  return me.apiKey?.umgebung === 'sandbox' ? 'SANDBOX' : 'LIVE'
 }
 
 // ──────────────────────────────────────────────────────────────────────────
@@ -72,6 +84,7 @@ async function main() {
   const companyName = me.tenant?.companyName || me.tenant?.userId || '(unbekannt)'
 
   console.error(`[epago-mcp] Verbunden als: ${companyName}`)
+  console.error(`[epago-mcp] Umgebung: ${umgebungLabel(me)}`)
   console.error(`[epago-mcp] Key-Scopes: ${permissions.join(', ') || '(keine)'}`)
   console.error(`[epago-mcp] Write-Tools: ${hasWrite ? 'aktiv' : 'NICHT registriert (read-only Key)'}`)
 
@@ -80,7 +93,7 @@ async function main() {
   // ──────────────────────────────────────────────────────────────────────────
   const server = new McpServer({
     name: 'epago',
-    version: '0.1.0',
+    version: '0.3.0',
   })
 
   // ──────────────────────────────────────────────────────────────────────────
@@ -88,7 +101,7 @@ async function main() {
   // ──────────────────────────────────────────────────────────────────────────
   server.tool(
     'mandant_info',
-    'Verbindungstest und Mandanten-Stammdaten abrufen. Zeigt Firmenname, Steuernummer, USt-ID und die Scopes des verwendeten API-Keys. Gut als erster Aufruf um die Verbindung zu pruefen.',
+    'Verbindungstest und Mandanten-Stammdaten abrufen. Zeigt Firmenname, Steuernummer, USt-ID, die Umgebung (LIVE oder SANDBOX) und die Scopes des verwendeten API-Keys. Gut als erster Aufruf um die Verbindung zu pruefen.',
     {},
     async () => {
       const result = await api.get<MeResponse>('/me')
@@ -99,6 +112,7 @@ async function main() {
             text: JSON.stringify(
               {
                 mandant: result.tenant,
+                umgebung: umgebungLabel(result),
                 apiKey: {
                   keyId: result.apiKey.keyId,
                   permissions: result.apiKey.permissions,

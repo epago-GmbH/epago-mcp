@@ -5,7 +5,8 @@
  * - Fehlerformat { error: { code, message } } → McpError; weitere Felder im
  *   Fehlerobjekt (z.B. Vorschlag/Optionen bei einer Zahlungsdifferenz) haengen
  *   als Datenblock an der Meldung
- * - 429 liefert verstaendliche Retry-Hinweis-Meldung
+ * - 429 nennt die Wartezeit aus dem Header `Retry-After` (Sekunden) und das
+ *   Limit aus `X-RateLimit-Limit`, sofern die API sie mitschickt
  */
 
 import { McpError, ErrorCode } from '@modelcontextprotocol/sdk/types.js'
@@ -60,9 +61,20 @@ async function request<T>(
   }
 
   if (res.status === 429) {
+    // Die API nennt seit v1.2.0 die Wartezeit im Sekunden-Header `Retry-After`
+    // (RFC 9110, 10.2.3) und den Zustand des Fensters in `X-RateLimit-*`.
+    // Wenn er da ist, wird er GENANNT statt "bitte kurz warten" — ein Client,
+    // der die Sekunden kennt, muss nicht raten.
+    const rohRetry = res.headers.get('retry-after')
+    const sekunden = rohRetry && /^\d+$/.test(rohRetry.trim()) ? Number(rohRetry.trim()) : null
+    const grenze = res.headers.get('x-ratelimit-limit')
+    const wartehinweis = sekunden !== null
+      ? `Bitte ${sekunden} Sekunde${sekunden === 1 ? '' : 'n'} warten und dann erneut versuchen.`
+      : 'Bitte kurz warten und dann erneut versuchen.'
+    const limithinweis = grenze ? ` Limit: ${grenze} Anfragen/Minute.` : ''
     throw new McpError(
       ErrorCode.InternalError,
-      `Rate-Limit ueberschritten (HTTP 429). Bitte kurz warten und dann erneut versuchen.`
+      `Rate-Limit ueberschritten (HTTP 429). ${wartehinweis}${limithinweis}`
     )
   }
 

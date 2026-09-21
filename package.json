@@ -1,6 +1,6 @@
 {
   "name": "@epago/epago-mcp",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "MCP-Server für epago: greift per API-Schlüssel auf die epago Public API v1 zu (Buchhaltung, Konten, Belege, Berichte)",
   "type": "module",
   "main": "dist/index.js",

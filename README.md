@@ -29,6 +29,29 @@ Beim Anlegen des Schlüssels wählst du die Berechtigungen:
 Der Klartext-Schlüssel (`epago_…`) wird nur einmal angezeigt. Ein Schlüssel gehört genau
 einem Mandanten und lässt sich in epago jederzeit widerrufen.
 
+### Zum Ausprobieren einen Sandbox-Schlüssel nehmen
+
+Neben der echten Buchhaltung hat jedes epago-Konto einen **Testmandanten**. Er wird unter
+**Einstellungen → API-Schlüssel** mit einem Klick angelegt und kommt mit Beispieldaten:
+Kontenrahmen, Geschäftsjahr, zwei Kunden, ein Lieferant, zwei Ausgangsrechnungen (eine davon
+bezahlt) und drei Buchungen.
+
+Dort im selben Bereich entsteht dann ein Schlüssel mit dem Präfix `epago_test_`. Er erreicht
+**ausschließlich** den Testmandanten und niemals die echte Buchhaltung: die Trennung hängt am
+Schlüssel selbst, nicht an einer Einstellung im Client.
+
+Aus dem Testmandanten geht außerdem nichts nach außen — keine E-Mail, kein ELSTER, keine
+Bankverbindung, keine Zahlung. Eine Testbuchung, die dort entsteht, ist trotzdem eine richtige
+Buchung: dieselben GoBD-Regeln, dieselbe Unveränderbarkeit. Wer neu anfangen will, setzt den
+Testmandanten zurück; die Schlüssel gelten danach weiter.
+
+Ein Konto hat einen echten Mandanten und einen Testmandanten. Alle Sandbox-Schlüssel eines
+Kontos arbeiten auf demselben Testmandanten; andere Konten sehen ihn nie.
+
+Welche Umgebung gerade aktiv ist, sagt der Server beim Start (`Umgebung: SANDBOX` bzw.
+`LIVE`) und das Werkzeug `mandant_info`. Für die ersten Schritte, für Beispiele und für alles,
+was man ausprobiert, bevor es in die Buchhaltung soll: Sandbox nehmen.
+
 ## Installation
 
 ```bash
@@ -88,7 +111,7 @@ Start mit einer Fehlermeldung.
 
 | Werkzeug | Was es tut |
 |---|---|
-| `mandant_info` | Verbindungstest, Stammdaten des Mandanten, Scopes des Schlüssels |
+| `mandant_info` | Verbindungstest, Stammdaten des Mandanten, Umgebung (LIVE oder SANDBOX), Scopes des Schlüssels |
 | `konten_liste` | Kontenplan, optional mit Salden für einen Zeitraum |
 | `konto_auszug` | Kontenblatt eines Kontos mit laufendem Saldo |
 | `buchungen_liste` | Buchungen mit allen Zeilen, gefiltert nach Datum und Status |
