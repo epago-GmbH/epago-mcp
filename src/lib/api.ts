@@ -14,6 +14,67 @@ import { config } from './config.js'
 
 const BASE = `${config.api.url}/api/v1`
 
+/**
+ * Zwei Bremsen fuer die Antwort der Gegenstelle (WP-32 Paket F, SEC-API-4;
+ * Haertungshinweis aus dem Codex-Review vom 21.09.2026).
+ *
+ * `fetch` in Node hat keine Gesamtzeitgrenze: eine Gegenstelle, die die
+ * Verbindung offen haelt und langsam tropft, legt das Werkzeug still. Und
+ * `res.json()` liest, was kommt — eine endlose Antwort fuellt den Speicher des
+ * Prozesses, in dem auch der Rest der MCP-Sitzung laeuft. Beides ist bei
+ * app.epago.de kein Thema; `EPAGO_API_URL` zeigt aber dorthin, wohin es
+ * konfiguriert ist.
+ *
+ * Die Werte sind grosszuegig gewaehlt: ein Kontenblatt ueber ein ganzes Jahr
+ * darf dauern und gross sein, ein haengender Aufruf soll trotzdem enden.
+ */
+const ZEITGRENZE_MS = 60_000
+const GROESSENGRENZE_BYTES = 16 * 1024 * 1024
+
+/**
+ * Antwort als Text lesen und dabei bei `GROESSENGRENZE_BYTES` abbrechen.
+ *
+ * Bewusst ueber den Datenstrom statt ueber `content-length`: den Header muss
+ * niemand schicken, und eine Antwort mit `transfer-encoding: chunked` hat
+ * keinen. Gelesen wird nur, was unter der Grenze liegt; danach wird der Strom
+ * abgebrochen, statt ihn zu Ende zu puffern.
+ */
+async function leseBegrenzt(res: Response): Promise<string> {
+  if (!res.body) return await res.text()
+
+  const leser = res.body.getReader()
+  const stuecke: Uint8Array[] = []
+  let gelesen = 0
+
+  try {
+    for (;;) {
+      const { done, value } = await leser.read()
+      if (done) break
+      if (!value) continue
+      gelesen += value.byteLength
+      if (gelesen > GROESSENGRENZE_BYTES) {
+        await leser.cancel()
+        throw new McpError(
+          ErrorCode.InternalError,
+          `Antwort der API groesser als ${GROESSENGRENZE_BYTES / 1024 / 1024} MB — abgebrochen.`
+        )
+      }
+      stuecke.push(value)
+    }
+  } finally {
+    leser.releaseLock()
+  }
+
+  return new TextDecoder().decode(
+    stuecke.reduce<Uint8Array>((alles, teil) => {
+      const neu = new Uint8Array(alles.length + teil.length)
+      neu.set(alles)
+      neu.set(teil, alles.length)
+      return neu
+    }, new Uint8Array(0))
+  )
+}
+
 export interface ApiError {
   error: {
     code: string
@@ -43,20 +104,38 @@ async function request<T>(
     }
   }
 
-  const res = await fetch(url.toString(), {
-    method,
-    headers: {
-      Authorization: `Bearer ${config.api.key}`,
-      'Content-Type': 'application/json',
-      Accept: 'application/json',
-    },
-    body: body !== undefined ? JSON.stringify(body) : undefined,
-  })
+  let res: Response
+  try {
+    res = await fetch(url.toString(), {
+      method,
+      headers: {
+        Authorization: `Bearer ${config.api.key}`,
+        'Content-Type': 'application/json',
+        Accept: 'application/json',
+      },
+      body: body !== undefined ? JSON.stringify(body) : undefined,
+      signal: AbortSignal.timeout(ZEITGRENZE_MS),
+    })
+  } catch (err) {
+    // Zeitgrenze oder Netzfehler. Die Meldung nennt weder Header noch
+    // Schluessel — nur, dass und woran es gescheitert ist.
+    const abgelaufen = (err as { name?: string })?.name === 'TimeoutError'
+    throw new McpError(
+      ErrorCode.InternalError,
+      abgelaufen
+        ? `Die API hat innerhalb von ${ZEITGRENZE_MS / 1000} Sekunden nicht geantwortet (${method} ${path}).`
+        : `Die API ist nicht erreichbar (${method} ${path}): ${(err as Error)?.message ?? 'unbekannter Netzfehler'}`
+    )
+  }
 
   let json: unknown
   try {
-    json = await res.json()
-  } catch {
+    const text = await leseBegrenzt(res)
+    json = text ? JSON.parse(text) : null
+  } catch (err) {
+    // Eine ueberschrittene Groessengrenze ist bereits ein McpError und muss
+    // durch; alles andere ist eine Antwort, die kein JSON war.
+    if (err instanceof McpError) throw err
     json = null
   }
 
