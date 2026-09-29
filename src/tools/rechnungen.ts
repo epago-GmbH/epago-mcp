@@ -6,7 +6,8 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { z } from 'zod'
 import { McpError, ErrorCode } from '@modelcontextprotocol/sdk/types.js'
-import { api } from '../lib/api.js'
+import { randomUUID } from 'node:crypto'
+import { api, IdempotenzNichtVerfuegbar } from '../lib/api.js'
 
 export function register(server: McpServer): void {
   server.tool(
@@ -256,9 +257,14 @@ export function registerWrite(server: McpServer): void {
       'GoBD: Eine gebuchte Rechnung ist unveränderbar, Korrektur nur per Storno. Ein Entwurf',
       'ist noch keine Buchung und hat keine Wirkung auf die Umsatzsteuer.',
       '',
-      'KEIN Idempotenzschluessel: Bei einem Timeout oder Verbindungsabbruch NICHT blind',
-      'wiederholen, sonst entsteht eine zweite Rechnung. Erst mit rechnungen_liste prüfen, ob die',
-      'Rechnung schon da ist.',
+      'WIEDERHOLEN IST MIT DEMSELBEN idempotenzSchluessel SICHER: Jeder Aufruf sendet einen',
+      'Idempotenzschlüssel (eigener Wert in idempotenzSchluessel, sonst eine neue UUID; er steht',
+      'in der Antwort und in jeder Fehlermeldung). Nach einem Timeout oder Verbindungsabbruch',
+      'denselben Aufruf mit DEMSELBEN idempotenzSchluessel wiederholen: es entsteht keine zweite',
+      'Rechnung, die Antwort trägt dann wiederholung: true und die bestehende Rechnung. Eine',
+      'Wiederholung bucht nie ein zweites Mal und bucht auch einen Entwurf nicht nachträglich.',
+      'Derselbe Schlüssel mit anderem Inhalt wird abgewiesen (409). Für eine NEUE Rechnung',
+      'keinen alten Schlüssel wiederverwenden.',
       '',
       'Nicht enthalten: Mahnung, Versand per E-Mail, PDF-Abruf, Angebot, Gutschrift und das Anlegen',
       'von Kunden. Dafür gibt es hier kein Werkzeug.',
@@ -286,6 +292,14 @@ export function registerWrite(server: McpServer): void {
       buyerReference: z.string().optional().describe('Leitweg-ID / Käuferreferenz für die E-Rechnung'),
       lines: z.array(zeile).min(1).max(200).describe('Positionen, 1 bis 200'),
       buchen: z.boolean().optional().describe('true nur auf ausdrückliche Aufforderung. Standard false (Entwurf).'),
+      idempotenzSchluessel: z
+        .string()
+        .regex(/^[\x21-\x7E]{1,200}$/)
+        .optional()
+        .describe(
+          'Idempotenzschlüssel (1 bis 200 sichtbare ASCII-Zeichen, z. B. eine UUID). Ohne Angabe ' +
+            'erzeugt das Werkzeug eine neue UUID. Für eine Wiederholung denselben Wert erneut senden.'
+        ),
     },
     async (params) => {
       if (!params.customerId && !params.partnerName) {
@@ -308,17 +322,48 @@ export function registerWrite(server: McpServer): void {
         throw new McpError(ErrorCode.InvalidParams, 'servicePeriodStart und servicePeriodEnd nur zusammen angeben.')
       }
 
-      const body: Record<string, unknown> = { ...params }
+      const { idempotenzSchluessel: eigenerSchluessel, ...felder } = params
+      const body: Record<string, unknown> = { ...felder }
       body.buchen = params.buchen === true
+      const idempotenzSchluessel = eigenerSchluessel ?? randomUUID()
 
-      const result = await api.post<{
+      type Antwort = {
         invoice?: unknown
-        buchung?: { gebucht?: boolean; fehler?: unknown } | null
-      }>('/invoices', body)
+        buchung?: { gebucht?: boolean; fehler?: { code?: string } | null } | null
+        wiederholung?: boolean
+      }
+      let result: Antwort
+      let ohneSchluessel = false
+      try {
+        result = await api.post<Antwort>('/invoices', body, { 'Idempotency-Key': idempotenzSchluessel })
+      } catch (err) {
+        if (err instanceof IdempotenzNichtVerfuegbar && !eigenerSchluessel) {
+          // Der Server kennt den Header noch nicht und hat NICHTS angelegt.
+          // Ohne eigenen Schluessel des Aufrufers einmal ohne Header senden:
+          // das ist genau das Verhalten vor dieser Version, und es ist sichtbar.
+          result = await api.post<Antwort>('/invoices', body)
+          ohneSchluessel = true
+        } else if (err instanceof McpError) {
+          throw new McpError(
+            err.code,
+            `${err.message}\n\nidempotenzSchluessel dieses Aufrufs: ${idempotenzSchluessel} ` +
+              '(für eine Wiederholung denselben Wert senden).'
+          )
+        } else {
+          throw err
+        }
+      }
 
       const gebucht = result.buchung?.gebucht === true
       let hinweis: string
-      if (params.buchen !== true) {
+      if (result.wiederholung === true) {
+        hinweis = gebucht
+          ? 'Wiederholung: Die Rechnung zu diesem Schlüssel gab es schon, sie ist gebucht. Nichts Neues angelegt oder gebucht.'
+          : result.buchung?.fehler?.code === 'wiederholung_bucht_nicht'
+            ? 'Wiederholung: Die Rechnung zu diesem Schlüssel gab es schon als ENTWURF. Sie wurde NICHT gebucht; ' +
+              'buchen lässt sie sich in epago unter Faktura.'
+            : 'Wiederholung: Die Rechnung zu diesem Schlüssel gab es schon. Nichts Neues angelegt.'
+      } else if (params.buchen !== true) {
         hinweis = 'Entwurf angelegt, nicht gebucht (buchen war nicht gesetzt).'
       } else if (gebucht) {
         hinweis = 'Rechnung angelegt und gebucht.'
@@ -327,8 +372,22 @@ export function registerWrite(server: McpServer): void {
           'ACHTUNG: Die Rechnung wurde als Entwurf angelegt, die BUCHUNG ist FEHLGESCHLAGEN. ' +
           'Grund: siehe buchung.fehler. Der Entwurf bleibt stehen und ist nicht gebucht.'
       }
+      if (ohneSchluessel) {
+        hinweis +=
+          ' Der Server unterstützt den Idempotenzschlüssel noch nicht; die Rechnung wurde ohne ihn ' +
+          'angelegt. Nach einem Timeout daher NICHT blind wiederholen, sondern mit rechnungen_liste prüfen.'
+      }
       return {
-        content: [{ type: 'text', text: JSON.stringify({ hinweis, ...result }, null, 2) }],
+        content: [
+          {
+            type: 'text',
+            text: JSON.stringify(
+              { hinweis, idempotenzSchluessel: ohneSchluessel ? null : idempotenzSchluessel, ...result },
+              null,
+              2
+            ),
+          },
+        ],
       }
     }
   )

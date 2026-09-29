@@ -130,7 +130,7 @@ Start mit einer Fehlermeldung.
 | `buchung_erstellen` | Buchung anlegen, vereinfacht (Betrag, zwei Konten, Steuerschlüssel) oder mit expliziten Zeilen |
 | `buchung_stornieren` | GoBD-konformer Storno: Gegenbuchung mit Tagesdatum, das Original bleibt stehen |
 | `zahlung_erfassen` | Zahlung an einem Beleg erfassen; Skonto, Teilzahlung und Forderungsausfall werden abgefragt, nicht geraten |
-| `rechnung_erstellen` | Ausgangsrechnung anlegen, als Entwurf oder (nur auf ausdrückliche Aufforderung) gebucht; meldet ein Scheitern der Buchung getrennt vom angelegten Entwurf |
+| `rechnung_erstellen` | Ausgangsrechnung anlegen, als Entwurf oder (nur auf ausdrückliche Aufforderung) gebucht; meldet ein Scheitern der Buchung getrennt vom angelegten Entwurf; mit demselben `idempotenzSchluessel` sicher wiederholbar |
 | `beleg_hochladen` | Beleg als Base64 hochladen (PDF, Bilder, Tabellen, max. 10 MB) |
 
 Die Beschreibungen der Werkzeuge sind bewusst ausführlich: sie sind die Schnittstelle zum
@@ -175,8 +175,15 @@ Sicherheitslücken bitte nicht als öffentliches Issue melden, sondern an
 
 ## Grenzen
 
-- **`rechnung_erstellen` hat keinen Idempotenzschlüssel.** Nach einem Timeout nicht blind
-  wiederholen, sondern zuerst mit `rechnungen_liste` prüfen, ob die Rechnung schon existiert.
+- **`rechnung_erstellen` ist mit demselben Idempotenzschlüssel sicher wiederholbar** (ab 0.5.0).
+  Jeder Aufruf sendet den Header `Idempotency-Key`: den Wert aus `idempotenzSchluessel` oder,
+  ohne Angabe, eine neue UUID, die in der Antwort und in jeder Fehlermeldung steht. Nach einem
+  Timeout denselben Aufruf mit demselben Schlüssel wiederholen: es entsteht keine zweite
+  Rechnung und keine zweite Buchung (`wiederholung: true`). Eine Wiederholung bucht auch
+  einen Entwurf nicht nachträglich. Derselbe Schlüssel mit anderem Inhalt wird mit 409
+  abgewiesen. Kennt der Server den Schlüssel noch nicht und wurde keiner vorgegeben, legt das
+  Werkzeug die Rechnung ohne ihn an und sagt das in der Antwort; dann gilt die alte Regel:
+  nach einem Timeout zuerst mit `rechnungen_liste` prüfen.
 - Die Rechnung wird nur auf ausdrückliche Aufforderung gebucht. Scheitert die Buchung, bleibt
   der Entwurf stehen; die Antwort nennt den Grund.
 - Nicht enthalten: Mahnungen, Versand per E-Mail, PDF-Abruf, Angebote, Gutschriften und das

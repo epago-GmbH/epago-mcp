@@ -91,11 +91,24 @@ function isApiError(body: unknown): body is ApiError {
   )
 }
 
+/**
+ * Die API kennt den Header `Idempotency-Key` fuer diesen Weg noch nicht
+ * (Serverstand ohne die zugehoerige Datenbankaenderung, HTTP 503
+ * `idempotency_unavailable`). Es wurde nichts angelegt; der Aufrufer
+ * entscheidet, ob er ohne Schluessel sendet.
+ */
+export class IdempotenzNichtVerfuegbar extends McpError {
+  constructor(message: string) {
+    super(ErrorCode.InternalError, message)
+  }
+}
+
 async function request<T>(
   method: string,
   path: string,
   body?: unknown,
-  params?: Record<string, string>
+  params?: Record<string, string>,
+  zusatzHeader?: Record<string, string>
 ): Promise<T> {
   const url = new URL(`${BASE}${path}`)
   if (params) {
@@ -112,6 +125,7 @@ async function request<T>(
         Authorization: `Bearer ${config.api.key}`,
         'Content-Type': 'application/json',
         Accept: 'application/json',
+        ...(zusatzHeader ?? {}),
       },
       body: body !== undefined ? JSON.stringify(body) : undefined,
       signal: AbortSignal.timeout(ZEITGRENZE_MS),
@@ -197,6 +211,10 @@ async function request<T>(
     throw new McpError(ErrorCode.InvalidRequest, `Konflikt (${apiCode}): ${msg}`)
   }
 
+  if (res.status === 503 && isApiError(json) && json.error.code === 'idempotency_unavailable') {
+    throw new IdempotenzNichtVerfuegbar(`API-Fehler 503 (idempotency_unavailable): ${json.error.message}`)
+  }
+
   if (!res.ok) {
     if (isApiError(json)) {
       // Manche Absagen tragen mehr als code und message: bleibt nach einer
@@ -225,5 +243,6 @@ export const api = {
   get: <T>(path: string, params?: Record<string, string>) =>
     request<T>('GET', path, undefined, params),
 
-  post: <T>(path: string, body: unknown) => request<T>('POST', path, body),
+  post: <T>(path: string, body: unknown, header?: Record<string, string>) =>
+    request<T>('POST', path, body, undefined, header),
 }
