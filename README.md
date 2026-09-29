@@ -2,7 +2,7 @@
 
 MCP-Server (stdio) für [epago](https://epago.de), die Buchhaltungssoftware für deutsche KMU.
 Damit kann jeder MCP-fähige Client direkt in deiner epago-Buchhaltung lesen und buchen:
-Kontenplan, Buchungen, Rechnungen, Zahlungen, Belege, BWA und Umsatzsteuer-Voranmeldung.
+Kontenplan, Buchungen, Rechnungen, Kunden, Zahlungen, Belege, BWA und Umsatzsteuer-Voranmeldung.
 
 Der Server ist ein reiner Client der [epago Public API v1](https://app.epago.de/api/openapi.json).
 Er braucht einen epago-Account und einen API-Schlüssel. Es gibt keinen Direktzugriff auf eine
@@ -24,7 +24,7 @@ Beim Anlegen des Schlüssels wählst du die Berechtigungen:
 | Scope | Wirkung im MCP-Server |
 |---|---|
 | `read` | Lese-Werkzeuge (Konten, Buchungen, Rechnungen, Berichte) |
-| `write` | zusätzlich die Schreib-Werkzeuge (Buchung anlegen, Storno, Zahlung, Beleg) |
+| `write` | zusätzlich die Schreib-Werkzeuge (Buchung anlegen, Storno, Zahlung, Rechnung, Beleg) |
 
 Der Klartext-Schlüssel (`epago_…`) wird nur einmal angezeigt. Ein Schlüssel gehört genau
 einem Mandanten und lässt sich in epago jederzeit widerrufen.
@@ -117,6 +117,8 @@ Start mit einer Fehlermeldung.
 | `buchungen_liste` | Buchungen mit allen Zeilen, gefiltert nach Datum und Status |
 | `rechnungen_liste` | Ein- und Ausgangsrechnungen mit Status und Zahlungsstatus |
 | `rechnung_zahlungen` | Zahlungen eines Belegs mit Betrag, Datum, Buchung und Zahlungsart |
+| `kunden_liste` | Kunden mit Kundennummer, Anschrift, USt-IdNr. und Zahlungsziel, um Rechnungen zu adressieren |
+| `rechnungen_ueberfaellig` | Offene Ausgangsrechnungen, standardmäßig nur die überfälligen, mit Tagen überfällig, offenem Betrag und Mahnstufe |
 | `bericht_bwa` | Betriebswirtschaftliche Auswertung für einen Zeitraum |
 | `bericht_ustva` | Kennzahlen der Umsatzsteuer-Voranmeldung für einen Zeitraum |
 | `salden` | Saldenliste aller Konten zu einem Stichtag |
@@ -128,6 +130,7 @@ Start mit einer Fehlermeldung.
 | `buchung_erstellen` | Buchung anlegen, vereinfacht (Betrag, zwei Konten, Steuerschlüssel) oder mit expliziten Zeilen |
 | `buchung_stornieren` | GoBD-konformer Storno: Gegenbuchung mit Tagesdatum, das Original bleibt stehen |
 | `zahlung_erfassen` | Zahlung an einem Beleg erfassen; Skonto, Teilzahlung und Forderungsausfall werden abgefragt, nicht geraten |
+| `rechnung_erstellen` | Ausgangsrechnung anlegen, als Entwurf oder (nur auf ausdrückliche Aufforderung) gebucht; meldet ein Scheitern der Buchung getrennt vom angelegten Entwurf |
 | `beleg_hochladen` | Beleg als Base64 hochladen (PDF, Bilder, Tabellen, max. 10 MB) |
 
 Die Beschreibungen der Werkzeuge sind bewusst ausführlich: sie sind die Schnittstelle zum
@@ -170,14 +173,14 @@ Sprachmodell und erklären dort, was GoBD-fest ist, was eine Rückfrage an den N
 Sicherheitslücken bitte nicht als öffentliches Issue melden, sondern an
 [service@epago.de](mailto:service@epago.de).
 
-## Roadmap
+## Grenzen
 
-Geplant, ohne Termin:
-
-- `rechnung_erstellen`: Ausgangsrechnung anlegen und buchen
-- `mahnung_erstellen`: Mahnung zu einer offenen Rechnung erzeugen
-- `rechnungen_ueberfaellig`: prüfen, welche Rechnungen fällig oder überfällig sind
-- `kunden_liste`: Kunden lesen, damit eine Rechnung adressiert werden kann
+- **`rechnung_erstellen` hat keinen Idempotenzschlüssel.** Nach einem Timeout nicht blind
+  wiederholen, sondern zuerst mit `rechnungen_liste` prüfen, ob die Rechnung schon existiert.
+- Die Rechnung wird nur auf ausdrückliche Aufforderung gebucht. Scheitert die Buchung, bleibt
+  der Entwurf stehen; die Antwort nennt den Grund.
+- Nicht enthalten: Mahnungen, Versand per E-Mail, PDF-Abruf, Angebote, Gutschriften und das
+  Anlegen von Kunden.
 
 ## Entwicklung
 

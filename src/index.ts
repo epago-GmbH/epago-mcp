@@ -14,7 +14,7 @@
  * Scope-Verhalten:
  *   - Beim Start wird /v1/me abgefragt → Scope-Pruefung
  *   - Write-Tools (buchung_erstellen, buchung_stornieren, zahlung_erfassen,
- *     beleg_hochladen)
+ *     beleg_hochladen, rechnung_erstellen)
  *     werden nur registriert, wenn der Key den "write"-Scope hat
  *   - Read-only-Keys sehen nur Lese-Tools (kein Laufzeitfehler durch falschen Scope)
  */
@@ -93,7 +93,7 @@ async function main() {
   // ──────────────────────────────────────────────────────────────────────────
   const server = new McpServer({
     name: 'epago',
-    version: '0.3.1',
+    version: '0.4.0',
   })
 
   // ──────────────────────────────────────────────────────────────────────────
