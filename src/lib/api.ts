@@ -103,6 +103,17 @@ export class IdempotenzNichtVerfuegbar extends McpError {
   }
 }
 
+/** Felder des Fehlerobjekts neben code und message, als lesbarer Block. */
+function zusatzangaben(body: ApiError): string {
+  const { code: _code, message: _message, ...rest } = body.error as Record<string, unknown> & {
+    code: string
+    message: string
+  }
+  return Object.keys(rest).length
+    ? `\n\nZusatzangaben der API:\n${JSON.stringify(rest, null, 2)}`
+    : ''
+}
+
 async function request<T>(
   method: string,
   path: string,
@@ -196,19 +207,23 @@ async function request<T>(
   if (res.status === 409) {
     const msg = isApiError(json) ? json.error.message : 'Regelkonflikt'
     const apiCode = isApiError(json) ? json.error.code : 'conflict'
+    // Weitere Felder im Fehlerobjekt (z.B. `existingDocumentId` bei einem
+    // doppelten Beleg) gehen mit nach aussen: ohne sie muesste der Agent den
+    // vorhandenen Datensatz suchen, den die API schon nennt.
+    const zusatz409 = isApiError(json) ? zusatzangaben(json) : ''
     if (apiCode === 'period_closed') {
       throw new McpError(
         ErrorCode.InvalidRequest,
-        `Periode ist bereits festgeschrieben (period_closed): ${msg} — Buchungen in dieser Periode sind nicht mehr moeglich.`
+        `Periode ist bereits festgeschrieben (period_closed): ${msg} — Buchungen in dieser Periode sind nicht mehr moeglich.${zusatz409}`
       )
     }
     if (apiCode === 'cannot_reverse') {
       throw new McpError(
         ErrorCode.InvalidRequest,
-        `Buchung kann nicht storniert werden (cannot_reverse): ${msg}`
+        `Buchung kann nicht storniert werden (cannot_reverse): ${msg}${zusatz409}`
       )
     }
-    throw new McpError(ErrorCode.InvalidRequest, `Konflikt (${apiCode}): ${msg}`)
+    throw new McpError(ErrorCode.InvalidRequest, `Konflikt (${apiCode}): ${msg}${zusatz409}`)
   }
 
   if (res.status === 503 && isApiError(json) && json.error.code === 'idempotency_unavailable') {
@@ -221,16 +236,9 @@ async function request<T>(
       // Zahlung ein Rest offen, liefert die API Vorschlag, Restbetrag und die
       // ausfuehrbaren Optionen im Fehlerobjekt mit. Die gehen hier MIT nach
       // aussen — eine Absage ohne Ausweg waere eine Sackgasse.
-      const { code, message, ...rest } = json.error as Record<string, unknown> & {
-        code: string
-        message: string
-      }
-      const zusatz = Object.keys(rest).length
-        ? `\n\nZusatzangaben der API:\n${JSON.stringify(rest, null, 2)}`
-        : ''
       throw new McpError(
         ErrorCode.InternalError,
-        `API-Fehler ${res.status} (${code}): ${message}${zusatz}`
+        `API-Fehler ${res.status} (${json.error.code}): ${json.error.message}${zusatzangaben(json)}`
       )
     }
     throw new McpError(ErrorCode.InternalError, `API-Fehler HTTP ${res.status}`)

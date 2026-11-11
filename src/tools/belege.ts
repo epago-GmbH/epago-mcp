@@ -9,7 +9,32 @@ import { api } from '../lib/api.js'
 export function registerWrite(server: McpServer): void {
   server.tool(
     'beleg_hochladen',
-    'Beleg als Base64-kodierten Dateiinhalt hochladen (max. 10 MB; PDF, JPEG, PNG, GIF, WEBP, XLSX, XLS, CSV). SHA256-Hash fuer GoBD-Integritaet wird serverseitig gebildet. Gibt die Beleg-ID zurueck, die beim Verknuepfen mit Buchungen benoetigt wird.',
+    [
+      'Beleg als Base64-kodierten Dateiinhalt hochladen und in epago aufbewahren (PDF, JPEG, PNG, GIF, WEBP, XLSX, XLS, CSV).',
+      'SHA256-Hash fuer GoBD-Integritaet wird serverseitig gebildet. Gibt die Beleg-ID zurueck.',
+      '',
+      'Groesse: hoechstens rund 3 MB Datei. Base64 vergroessert den Inhalt um ein Drittel, und',
+      'app.epago.de nimmt hoechstens 4,5 MB je Anfrage an; die 10 MB, die der Server selbst pruefen',
+      'wuerde, werden darum nie erreicht. Groessere Belege laedt der Nutzer in der Oberflaeche hoch.',
+      '',
+      'Der Upload legt den Beleg nur ab. Er wird NICHT gelesen (keine Texterkennung) und laesst sich',
+      'ueber diese Schnittstelle NICHT mit einer Buchung verknuepfen: buchung_erstellen hat kein Feld',
+      'fuer eine Beleg-ID. Zur Zuordnung die Belegnummer als referenz in buchung_erstellen uebernehmen.',
+      'Wird dieselbe Datei ein zweites Mal hochgeladen, antwortet die API mit 409 beleg_dublette und',
+      'nennt die vorhandene Beleg-ID (existingDocumentId); nicht erneut senden.',
+      '',
+      'Was nach dem Upload mit einer EINGANGSRECHNUNG geschieht:',
+      '- OHNE Zahlung (noch nicht bezahlt, oder keine passende Geldbewegung bekannt): NICHT buchen.',
+      '  Den Beleg ablegen und dem Nutzer als offene Aufgabe melden (Lieferant, Rechnungsnummer,',
+      '  Betrag, Faelligkeit). Eine Eingangsrechnung als offener Posten laesst sich ueber diese',
+      '  Schnittstelle noch nicht anlegen; eine frei gebuchte Verbindlichkeit wuerde niemand ueberwachen.',
+      '- BEZAHLT und einfach (ein Steuersatz 7 % oder 19 %, inlaendischer Lieferant, keine Bewirtung,',
+      '  kein Reverse Charge): mit buchung_erstellen buchen, MIT Steuerschluessel, sodass die Buchung',
+      '  eine Aufwandszeile UND eine Steuerzeile (Vorsteuer) traegt. Gegenkonto ist das Geldkonto, ueber',
+      '  das bezahlt wurde (Bank oder Kasse). Den Buchungssatz vorher dem Nutzer zeigen.',
+      '- Alles andere (Reverse Charge, Bewirtung, mehrere Steuersaetze, unlesbarer Beleg): dem Nutzer',
+      '  melden und nachfragen, bevor gebucht wird.',
+    ].join('\n'),
     {
       dateiinhalt: z
         .string()

@@ -131,7 +131,7 @@ Start mit einer Fehlermeldung.
 | `buchung_stornieren` | GoBD-konformer Storno: Gegenbuchung mit Tagesdatum, das Original bleibt stehen |
 | `zahlung_erfassen` | Zahlung an einem Beleg erfassen; Skonto, Teilzahlung und Forderungsausfall werden abgefragt, nicht geraten |
 | `rechnung_erstellen` | Ausgangsrechnung anlegen, als Entwurf oder (nur auf ausdrückliche Aufforderung) gebucht; meldet ein Scheitern der Buchung getrennt vom angelegten Entwurf; mit demselben `idempotenzSchluessel` sicher wiederholbar |
-| `beleg_hochladen` | Beleg als Base64 hochladen (PDF, Bilder, Tabellen, max. 10 MB) |
+| `beleg_hochladen` | Beleg als Base64 hochladen und aufbewahren (PDF, Bilder, Tabellen, höchstens rund 3 MB Datei); ohne Texterkennung und ohne Verknüpfung zu einer Buchung, eine doppelte Datei ergibt 409 mit der vorhandenen Beleg-ID |
 
 Die Beschreibungen der Werkzeuge sind bewusst ausführlich: sie sind die Schnittstelle zum
 Sprachmodell und erklären dort, was GoBD-fest ist, was eine Rückfrage an den Nutzer braucht
@@ -154,6 +154,19 @@ Sprachmodell und erklären dort, was GoBD-fest ist, was eine Rückfrage an den N
   ohne Schlüssel (reine Umbuchung) ist `seite` (`S` oder `H`, bezogen auf das Bruttokonto)
   Pflicht, weil sie sich dort nicht ableiten lässt. Wer die Zeilen selbst vorgeben will,
   nutzt `lines[]`. In beiden Fällen prüft der Server Soll gleich Haben und Steuerkonsistenz.
+- **Eingangsrechnungen:** eine Eingangsrechnung ohne Zahlung wird nicht frei gebucht, sondern
+  dem Nutzer als offene Aufgabe gemeldet. Einen offenen Posten für Lieferanten gibt es über die
+  API noch nicht, und eine frei gebuchte Verbindlichkeit überwacht niemand. Ein bezahlter
+  einfacher Eingangsbeleg (ein Steuersatz, inländischer Lieferant) wird mit Steuerschlüssel
+  gebucht, sodass Aufwands- und Steuerzeile entstehen. Reverse Charge, Bewirtung und Belege mit
+  mehreren Sätzen meldet der Agent dem Nutzer, bevor er bucht.
+- **Belegablage:** `beleg_hochladen` legt den Beleg nur ab. Die Größe ist durch die Plattform
+  begrenzt (4,5 MB je Anfrage, Base64 vergrößert um ein Drittel, also rund 3 MB Datei). Mit
+  einer Buchung verknüpfen lässt er sich über die API nicht; die Belegnummer gehört in
+  `referenz`.
+- **Fehlerdetails:** Antwortet die API mit Zusatzangaben (z.B. `existingDocumentId` bei 409
+  `beleg_dublette`, Vorschlag und Optionen bei einem offenen Rest), stehen sie in der
+  Fehlermeldung des Werkzeugs (ab 0.5.1 auch bei 409).
 - **Rate-Limit:** 60 Aufrufe je Minute und Schlüssel. Bei `429` kurz warten.
 
 ## Sicherheit

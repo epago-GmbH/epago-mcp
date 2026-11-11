@@ -151,7 +151,7 @@ export function registerWrite(server: McpServer): void {
       'Skontovereinbarung am Beleg abweicht (Frist abgelaufen, kein Skonto vereinbart, Betrag hoeher).',
       '',
       'GoBD: Skonto und Forderungsausfall erzeugen eine eigene Buchung mit dem Zahlungsdatum',
-      '(Paragraf 17 Abs. 1 Satz 7 UStG). Die Rechnung selbst bleibt unveraendert.',
+      '(Paragraf 17 Abs. 1 Satz 8 UStG). Die Rechnung selbst bleibt unveraendert.',
     ].join('\n'),
     {
       rechnungId: z
@@ -207,9 +207,17 @@ export function registerWrite(server: McpServer): void {
         `/invoices/${encodeURIComponent(params.rechnungId)}/payments`,
         body
       )
-      return {
-        content: [{ type: 'text', text: JSON.stringify(result, null, 2) }],
+      // Die Meldung sagt in einem Satz, was gebucht wurde (Skonto,
+      // Ausfall, offener Rest). Sie steht vor dem JSON, damit ein Agent sie
+      // nicht aus restBetrag und Befund selbst ableitet.
+      const meldung = (result as { payment?: { entgeltminderung?: { meldung?: unknown } } })
+        ?.payment?.entgeltminderung?.meldung
+      const content: Array<{ type: 'text'; text: string }> = []
+      if (typeof meldung === 'string' && meldung) {
+        content.push({ type: 'text', text: `Ergebnis: ${meldung}` })
       }
+      content.push({ type: 'text', text: JSON.stringify(result, null, 2) })
+      return { content }
     }
   )
 
